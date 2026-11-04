@@ -1,6 +1,6 @@
 # Bangumi → Notion 同步
 
-[English](README.en.md) | 简体中文
+[English](README.en.md) | 简体中文 | [日本語](README.ja.md)
 
 一个油猴脚本：在 [Bangumi](https://bgm.tv) 条目页上标记动画后，自动把收藏状态、进度和日期同步到你的 Notion 数据库。
 
@@ -11,7 +11,7 @@
 ## 安装
 
 1. 安装脚本管理器：[Tampermonkey](https://www.tampermonkey.net/) 或 [Violentmonkey](https://violentmonkey.github.io/)。
-2. 安装 [bangumi-notion-sync.js](bangumi-notion-sync.js)。
+2. 安装 [bangumi-notion-sync.user.js](bangumi-notion-sync.user.js)。
 3. 按下面的步骤准备好 Notion 数据库和两个 Token。
 
 ## 准备工作

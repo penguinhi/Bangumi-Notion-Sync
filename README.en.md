@@ -1,6 +1,6 @@
 # Bangumi → Notion Sync
 
-English | [简体中文](README.md)
+English | [简体中文](README.md) | [日本語](README.ja.md)
 
 A userscript that syncs your anime collection status, progress and dates from [Bangumi](https://bgm.tv) to a Notion database whenever you update an entry on its subject page.
 
@@ -11,7 +11,7 @@ A userscript that syncs your anime collection status, progress and dates from [B
 ## Installation
 
 1. Install a userscript manager: [Tampermonkey](https://www.tampermonkey.net/) or [Violentmonkey](https://violentmonkey.github.io/).
-2. Install [bangumi-notion-sync.js](bangumi-notion-sync.js).
+2. Install [bangumi-notion-sync.user.js](bangumi-notion-sync.user.js).
 3. Set up the Notion database and the two tokens as described below.
 
 ## Setup
