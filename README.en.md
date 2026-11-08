@@ -82,6 +82,8 @@ Bangumi labels are shown in Chinese, as they appear on the site.
 
 After updating an existing entry, the notice lists each change on its own line, e.g. 「状态:Watching → Completed」 (status), 「进度:11 → 12/12」 (progress), 「补完成日期:2026-11-04」 (finish date filled).
 
+**Total episodes**: use Bangumi's announced episode count first. When it is unknown (shown as `*`), provisionally use the number of main-story episode entries currently listed, excluding specials, OP, ED and other types. This applies to both new and existing entries. If neither an announced count nor main-story episodes are available, or the episode query fails, do not write the total episode field: leave it blank for new entries and preserve its current value for existing entries. Status and the actual number of episodes watched still sync normally. The script will try to fetch the total episode count again on the next automatic check.
+
 **Matching**: by Bangumi URL first, then by title (original or Chinese) if no URL match. Old entries matched by title get their Bangumi URL filled in.
 
 **Dates**:

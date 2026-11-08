@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bangumi → Notion 同步
 // @namespace    penguinhi.bangumi.notion
-// @version      2.3.0
+// @version      2.3.3
 // @description  把 bgm.tv 的动画收藏单向同步到 Notion:没有的新建,已有的只更新状态、集数和进度
 // @author       penguinhi
 // @match        *://bgm.tv/subject/*
@@ -428,35 +428,49 @@
   }
 
   // 推不出时:单集条目用当天,多集条目看配置
-  function resolveStart(subject, derived) {
+  function resolveStart(totalEps, derived) {
     if (derived) return derived;
-    if (totalEpsOf(subject) <= 1) return today();
+    if (totalEps === 1) return today();
     return CFG.START_DATE_FALLBACK_TODAY ? today() : null;
   }
 
-  // eps 是正片话数;total_episodes 含 SP/OP/ED
-  function totalEpsOf(subject) {
-    return subject.eps || subject.total_episodes || 1;
+  // 优先用已公布的话数;未知时暂用已建立的正片数量,不含 SP/OP/ED。
+  async function totalEpsOf(subject) {
+    if (Number.isInteger(subject.eps) && subject.eps > 0) return subject.eps;
+    try {
+      // total 是筛选后的总数,不受分页 limit 影响,无需下载全部章节。
+      const res = await bgm('/v0/episodes?subject_id=' + subject.id + '&type=0&limit=1', false);
+      if (
+        res.status === 200 &&
+        res.data &&
+        Number.isInteger(res.data.total) &&
+        res.data.total > 0
+      ) {
+        return res.data.total;
+      }
+    } catch (e) {}
+    // 无正片章节或查询失败时跳过总集数,不阻断其他字段同步。
+    return null;
   }
 
   // 封顶到总集数:Bangumi 进度含 SP,可能出现 26/24
-  function watchedOf(subject, col) {
-    const total = totalEpsOf(subject);
+  function watchedOf(total, col) {
+    // 无法获取总集数时使用实际进度,不推算看完集数或按旧总数截断。
+    if (total === null) return col.ep_status || 0;
     const status = STATUS_MAP[col.type];
     const raw = status === 'Completed' ? total : col.ep_status || 0;
     return Math.min(raw, total);
   }
 
-  function buildNewProps(subject, col, derivedStart) {
+  function buildNewProps(subject, col, derivedStart, totalEps) {
     const P = CFG.PROP;
     const status = STATUS_MAP[col.type];
-    const totalEps = totalEpsOf(subject);
 
     const props = {};
     props[P.title] = { title: [{ text: { content: subject.name || '' } }] };
     props[P.status] = { select: { name: status } };
-    props[P.eps] = { number: totalEps };
-    props[P.epsWatched] = { number: watchedOf(subject, col) };
+    if (totalEps !== null) props[P.eps] = { number: totalEps };
+    props[P.epsWatched] = { number: watchedOf(totalEps, col) };
     props[P.bangumi] = { url: subjectUrl(subject.id) };
 
     if (subject.name_cn) {
@@ -481,7 +495,7 @@
     }
 
     const now = today();
-    const start = resolveStart(subject, derivedStart);
+    const start = resolveStart(totalEps, derivedStart);
 
     if (status === 'Watching') {
       props[P.startDate] = { date: { start: start || now } };
@@ -495,11 +509,10 @@
 
   // 改 Status / Episodes / Episodes Watched,日期和链接仅在为空时补;其余字段留给 Notion 手改。
   // 返回要写的属性,以及给提示用的改动说明。
-  function buildAdvanceProps(subject, col, page, derivedStart) {
+  function buildAdvanceProps(subject, col, page, derivedStart, totalEps) {
     const P = CFG.PROP;
     const old = page.properties;
     const status = STATUS_MAP[col.type];
-    const totalEps = totalEpsOf(subject);
     const props = {};
     const changes = [];
     const show = (v) => (v === null || v === undefined ? '空' : v);
@@ -510,23 +523,25 @@
       changes.push('状态:' + show(prevStatus) + ' → ' + status);
     }
 
-    // 连载中总集数可能变;Bangumi 还没填集数时不覆盖
+    // 连载中总集数可能变;话数未知时也按当前正片数量更新。
     const prevTotal = numberOf(old[P.eps]);
-    if ((subject.eps || subject.total_episodes) && prevTotal !== totalEps) {
+    if (totalEps !== null && prevTotal !== totalEps) {
       props[P.eps] = { number: totalEps };
       changes.push('总集数:' + show(prevTotal) + ' → ' + totalEps);
     }
 
-    const watched = watchedOf(subject, col);
+    const watched = watchedOf(totalEps, col);
     const prevWatched = numberOf(old[P.epsWatched]);
     if (prevWatched !== watched) {
       props[P.epsWatched] = { number: watched };
-      changes.push('进度:' + show(prevWatched) + ' → ' + watched + '/' + totalEps);
+      changes.push(
+        '进度:' + show(prevWatched) + ' → ' + watched + (totalEps === null ? '' : '/' + totalEps)
+      );
     }
 
     const finished = FINISHED.indexOf(status) !== -1;
     const now = today();
-    const start = resolveStart(subject, derivedStart);
+    const start = resolveStart(totalEps, derivedStart);
 
     if (!dateOf(old[P.startDate])) {
       const fill = status === 'Watching' ? start || now : finished ? start : null;
@@ -667,10 +682,11 @@
           );
           return;
         }
+        const totalEps = await totalEpsOf(subject);
         const derivedStart = await firstWatchedDate();
-        const adv = buildAdvanceProps(subject, col, found.page, derivedStart);
+        const adv = buildAdvanceProps(subject, col, found.page, derivedStart, totalEps);
         if (!adv.changes.length) {
-          GM_setValue(key, fp);
+          GM_setValue(key, totalEps === null ? 'retry' : fp);
           toast(
             notesChanged(stored, col)
               ? '评分和吐槽不会同步到已有条目,需要的话请在 Notion 里手改。'
@@ -681,7 +697,8 @@
         }
         const upd = await notion('PATCH', '/pages/' + found.page.id, { properties: adv.props });
         if (upd.status === 200) {
-          GM_setValue(key, fp);
+          // 总集数暂不可用时保留重试标记,首次手动同步也能在下次自动检查时重试。
+          GM_setValue(key, totalEps === null ? 'retry' : fp);
           toast(
             '已更新:' +
               (subject.name_cn || subject.name) +
@@ -700,15 +717,16 @@
       }
 
       // ── 新建 ──
+      const totalEps = await totalEpsOf(subject);
       const derivedStart = await firstWatchedDate();
-      const built = buildNewProps(subject, col, derivedStart);
+      const built = buildNewProps(subject, col, derivedStart, totalEps);
       const body = { parent: { database_id: CFG.NOTION_DB_ID }, properties: built.props };
       if (CFG.SET_PAGE_COVER && built.coverUrl) {
         body.cover = { type: 'external', external: { url: built.coverUrl } };
       }
       const res = await notion('POST', '/pages', body);
       if (res.status === 200) {
-        GM_setValue(key, fp);
+        GM_setValue(key, totalEps === null ? 'retry' : fp);
         toast('已新建:' + (subject.name_cn || subject.name) + ' → ' + built.status, 'done');
       } else {
         const msg = ((res.data || {}).message) || res.raw || '';
