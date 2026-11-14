@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bangumi → Notion 同步
 // @namespace    penguinhi.bangumi.notion
-// @version      2.4.0
+// @version      2.4.1
 // @description  把 bgm.tv 的动画收藏单向同步到 Notion:没有的新建,已有的更新状态、集数和进度,并补全空字段
 // @author       penguinhi
 // @match        *://bgm.tv/subject/*
@@ -451,10 +451,24 @@
     }
   }
 
-  // 推不出时:单集条目用当天,多集条目看配置
-  function resolveStart(totalEps, derived) {
+  // 收藏的 updated_at 按 TIMEZONE 取日期,拿不到时用当天。
+  // 目前它只在改收藏状态时更新(改评分、吐槽、分集都不更新,官方称之为 bug),
+  // 可近似看作标记当前状态的日期。手动同步以前的作品时,比当天准确。
+  function collectedDay(col) {
+    const t = toMillis(col.updated_at);
+    return t === null ? today() : bgmDay(t);
+  }
+
+  // 完成日期取收藏时间,但不早于开始日期(先标看过、后补勾分集时可能倒挂)
+  function resolveFinish(col, start) {
+    const d = collectedDay(col);
+    return start && d < start ? start : d;
+  }
+
+  // 推不出时:单集条目用收藏时间,多集条目看配置
+  function resolveStart(totalEps, derived, col) {
     if (derived) return derived;
-    if (totalEps === 1) return today();
+    if (totalEps === 1) return collectedDay(col);
     return CFG.START_DATE_FALLBACK_TODAY ? today() : null;
   }
 
@@ -519,12 +533,12 @@
     }
 
     const now = today();
-    const start = resolveStart(totalEps, derivedStart);
+    const start = resolveStart(totalEps, derivedStart, col);
 
     if (status === 'Watching') {
       props[P.startDate] = { date: { start: start || now } };
     } else if (FINISHED.indexOf(status) !== -1) {
-      props[P.finishDate] = { date: { start: now } };
+      props[P.finishDate] = { date: { start: resolveFinish(col, start) } };
       if (start) props[P.startDate] = { date: { start: start } };
     }
 
@@ -565,18 +579,22 @@
 
     const finished = FINISHED.indexOf(status) !== -1;
     const now = today();
-    const start = resolveStart(totalEps, derivedStart);
+    const start = resolveStart(totalEps, derivedStart, col);
 
-    if (!dateOf(old[P.startDate])) {
+    // 页面最终的开始日期:已有的,或这次要补的
+    let pageStart = dateOf(old[P.startDate]);
+    if (!pageStart) {
       const fill = status === 'Watching' ? start || now : finished ? start : null;
       if (fill) {
         props[P.startDate] = { date: { start: fill } };
         changes.push('补开始日期:' + fill);
+        pageStart = fill;
       }
     }
     if (finished && !dateOf(old[P.finishDate])) {
-      props[P.finishDate] = { date: { start: now } };
-      changes.push('补完成日期:' + now);
+      const finish = resolveFinish(col, pageStart);
+      props[P.finishDate] = { date: { start: finish } };
+      changes.push('补完成日期:' + finish);
     }
 
     // 补上链接,下次就能按链接精确匹配

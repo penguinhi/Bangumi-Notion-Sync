@@ -90,8 +90,8 @@ After updating an existing entry, the notice lists each change on its own line, 
 
 **Dates**:
 
-- **Start Date**: the date you first marked an episode as watched. If that's unavailable, single-episode entries such as movies use today; multi-episode entries are left blank by default.
-- **Finish Date**: the date of the sync. If you mark something as watched in the app and only open its page on the web days later, Finish Date will be the day you opened it.
+- **Start Date**: the date you first marked an episode as watched. If that's unavailable, single-episode entries such as movies use the collection time (same as Finish Date); multi-episode entries are left blank by default.
+- **Finish Date**: the collection time, i.e. the time shown under 「我看过这部动画」 in the collection box on the subject page, so manually syncing something you finished long ago does not set it to today. If that's unavailable, the date of the sync is used; if it's earlier than Start Date, Start Date is used. This time currently only changes when you change the collection status, not when you edit the rating, comment or episodes. Bangumi documents that as a bug, so this may change if it gets fixed.
 - **Time zone**: all dates use `TIMEZONE` (default `Asia/Tokyo`). bgm.tv displays times in UTC+8, so an episode ticked late at night may land on the next day in Notion.
 
 ## Configuration
