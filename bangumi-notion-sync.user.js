@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Bangumi → Notion 同步
 // @namespace    penguinhi.bangumi.notion
-// @version      2.3.3
-// @description  把 bgm.tv 的动画收藏单向同步到 Notion:没有的新建,已有的只更新状态、集数和进度
+// @version      2.4.0
+// @description  把 bgm.tv 的动画收藏单向同步到 Notion:没有的新建,已有的更新状态、集数和进度,并补全空字段
 // @author       penguinhi
 // @match        *://bgm.tv/subject/*
 // @match        *://bangumi.tv/subject/*
@@ -304,6 +304,27 @@
     return prop && prop.type === 'number' ? prop.number : null;
   }
 
+  function textOf(prop) {
+    if (!prop) return '';
+    const parts = prop.type === 'title' ? prop.title : prop.type === 'rich_text' ? prop.rich_text : [];
+    return (parts || []).map((t) => t.plain_text || '').join('');
+  }
+
+  // 属性存在且没有值。数据库里没有这一列或类型不符时返回 false,不去写它。
+  function isBlank(prop) {
+    if (!prop) return false;
+    switch (prop.type) {
+      case 'title':
+      case 'rich_text':
+      case 'files':
+        return !(prop[prop.type] || []).length;
+      case 'date':
+        return !prop.date;
+      default:
+        return false;
+    }
+  }
+
   // 上次记录的指纹里,评分或吐槽和现在不同
   function notesChanged(stored, col) {
     try {
@@ -376,8 +397,9 @@
 
   // ── 查重:先按链接,再按标题 ──
   async function findExisting(subject) {
+    const P = CFG.PROP;
     const byUrl = await notion('POST', '/databases/' + CFG.NOTION_DB_ID + '/query', {
-      filter: { property: CFG.PROP.bangumi, url: { equals: subjectUrl(subject.id) } },
+      filter: { property: P.bangumi, url: { equals: subjectUrl(subject.id) } },
       page_size: 1,
     });
     if (byUrl.status !== 200) return { error: byUrl };
@@ -387,22 +409,24 @@
 
     if (!CFG.TITLE_GUARD) return { page: null };
 
+    // Title 是原名,Alternative Title 是中文名
     const or = [];
-    if (subject.name) or.push({ property: CFG.PROP.title, title: { equals: subject.name } });
+    if (subject.name) or.push({ property: P.title, title: { equals: subject.name } });
     if (subject.name_cn) {
-      or.push({ property: CFG.PROP.title, title: { equals: subject.name_cn } });
-      or.push({ property: CFG.PROP.altTitle, rich_text: { equals: subject.name_cn } });
+      or.push({ property: P.altTitle, rich_text: { equals: subject.name_cn } });
     }
     if (!or.length) return { page: null };
 
+    // 只认还没填链接的页面:已绑定其他条目的同名页面(如重制版)不会被抢走
     const byTitle = await notion('POST', '/databases/' + CFG.NOTION_DB_ID + '/query', {
-      filter: { or: or },
-      page_size: 1,
+      filter: { and: [{ or: or }, { property: P.bangumi, url: { is_empty: true } }] },
+      page_size: 2,
     });
     if (byTitle.status !== 200) return { error: byTitle };
-    if ((byTitle.data.results || []).length) {
-      return { page: byTitle.data.results[0], matchedBy: 'title' };
-    }
+    const hits = byTitle.data.results || [];
+    // 多条同名时无法判断是哪一条,不写入,交给用户手动填链接
+    if (hits.length > 1) return { page: null, ambiguous: true };
+    if (hits.length === 1) return { page: hits[0], matchedBy: 'title' };
     return { page: null };
   }
 
@@ -467,7 +491,7 @@
     const status = STATUS_MAP[col.type];
 
     const props = {};
-    props[P.title] = { title: [{ text: { content: subject.name || '' } }] };
+    if (subject.name) props[P.title] = { title: [{ text: { content: subject.name } }] };
     props[P.status] = { select: { name: status } };
     if (totalEps !== null) props[P.eps] = { number: totalEps };
     props[P.epsWatched] = { number: watchedOf(totalEps, col) };
@@ -507,8 +531,8 @@
     return { props: props, coverUrl: coverUrl, status: status };
   }
 
-  // 改 Status / Episodes / Episodes Watched,日期和链接仅在为空时补;其余字段留给 Notion 手改。
-  // 返回要写的属性,以及给提示用的改动说明。
+  // 改 Status / Episodes / Episodes Watched;其余字段只在 Notion 里为空时补,已有的值不覆盖。
+  // 返回要写的属性、页面封面,以及给提示用的改动说明。
   function buildAdvanceProps(subject, col, page, derivedStart, totalEps) {
     const P = CFG.PROP;
     const old = page.properties;
@@ -562,7 +586,37 @@
       changes.push('补 Bangumi 链接');
     }
 
-    return { props: props, changes: changes };
+    // 其余字段:取新建时会写的值,Notion 里为空才补
+    const fresh = buildNewProps(subject, col, derivedStart, totalEps);
+    const fill = [
+      [P.title, '补标题'],
+      [P.altTitle, '补中文标题'],
+      [P.rating, '补评分:' + col.rate],
+      [P.comment, '补吐槽'],
+      [P.aired, '补放送日期:' + subject.date],
+      [P.cover, '补封面'],
+    ];
+    for (const [key, label] of fill) {
+      if (fresh.props[key] && isBlank(old[key])) {
+        props[key] = fresh.props[key];
+        changes.push(label);
+      }
+    }
+
+    let cover = null;
+    if (CFG.SET_PAGE_COVER && fresh.coverUrl && !page.cover) {
+      cover = { type: 'external', external: { url: fresh.coverUrl } };
+      changes.push('补页面封面');
+    }
+
+    // Notion 里已有的评分/吐槽与 Bangumi 不同(不会覆盖,只用来提示)
+    const rateNow = col.rate ? String(col.rate) : '';
+    const commentNow = (col.comment || '').slice(0, 2000);
+    const notesStale =
+      (!isBlank(old[P.rating]) && textOf(old[P.rating]) !== rateNow) ||
+      (!isBlank(old[P.comment]) && textOf(old[P.comment]) !== commentNow);
+
+    return { props: props, cover: cover, changes: changes, notesStale: notesStale };
   }
 
   // ── 主流程 ──
@@ -670,6 +724,17 @@
         return;
       }
 
+      if (found.ambiguous) {
+        // 记下指纹,避免自动检查反复提示;填好链接后手动点一次同步即可
+        GM_setValue(key, fp);
+        toast(
+          'Notion 里有多条同名且没填链接的页面,无法确定是哪一条,未做改动。\n' +
+            '请给对应页面填上 Bangumi 链接:' + subjectUrl(subject.id) + ',再点「同步到 Notion」。',
+          'error'
+        );
+        return;
+      }
+
       // ── 已存在 ──
       if (found.page) {
         if (CFG.ON_EXISTING === 'skip') {
@@ -685,17 +750,19 @@
         const totalEps = await totalEpsOf(subject);
         const derivedStart = await firstWatchedDate();
         const adv = buildAdvanceProps(subject, col, found.page, derivedStart, totalEps);
+        // 刚在 Bangumi 改了评分/吐槽,而 Notion 里已有不同的值
+        const notesHint =
+          adv.notesStale && notesChanged(stored, col)
+            ? 'Notion 里已有的评分和吐槽不会被覆盖,需要的话请在 Notion 里手改。'
+            : '';
         if (!adv.changes.length) {
           GM_setValue(key, totalEps === null ? 'retry' : fp);
-          toast(
-            notesChanged(stored, col)
-              ? '评分和吐槽不会同步到已有条目,需要的话请在 Notion 里手改。'
-              : 'Notion 里已是最新。',
-            'done'
-          );
+          toast(notesHint || 'Notion 里已是最新。', 'done');
           return;
         }
-        const upd = await notion('PATCH', '/pages/' + found.page.id, { properties: adv.props });
+        const patch = { properties: adv.props };
+        if (adv.cover) patch.cover = adv.cover;
+        const upd = await notion('PATCH', '/pages/' + found.page.id, patch);
         if (upd.status === 200) {
           // 总集数暂不可用时保留重试标记,首次手动同步也能在下次自动检查时重试。
           GM_setValue(key, totalEps === null ? 'retry' : fp);
@@ -704,7 +771,8 @@
               (subject.name_cn || subject.name) +
               (found.matchedBy === 'title' ? '(按标题匹配到)' : '') +
               '\n' +
-              adv.changes.join('\n'),
+              adv.changes.join('\n') +
+              (notesHint ? '\n' + notesHint : ''),
             'done'
           );
         } else {

@@ -5,7 +5,7 @@ English | [简体中文](README.md) | [日本語](README.ja.md)
 A userscript that syncs your anime collection status, progress and dates from [Bangumi](https://bgm.tv) to a Notion database whenever you update an entry on its subject page.
 
 - **One-way**: writes from Bangumi to Notion only. Bangumi is never modified.
-- **Respects your edits**: for entries already in Notion, it only updates status, episode count and progress. Ratings, comments and dates you filled in yourself are left alone.
+- **Respects your edits**: for entries already in Notion, it updates status, episode count and progress, and only fills other properties when they are empty. Ratings, comments and dates you filled in yourself are left alone.
 - **No secrets in code**: tokens are entered in a settings panel on first use and stored locally in your userscript manager.
 
 ## Installation
@@ -77,14 +77,16 @@ Bangumi labels are shown in Chinese, as they appear on the site.
 | 搁置 / 抛弃 (On hold / Dropped) | Same as Watched, but progress is actual | Same as left |
 | Ticking episodes | Created with current status | Update Episodes Watched |
 | (Total episodes change on Bangumi, e.g. during airing) | — | Update Episodes |
-| Rating or commenting | Written to Rating / Comment | Not changed |
+| Rating or commenting | Written to Rating / Comment | Filled only if empty; existing values are kept |
 | Removing from collection | — | Shows a notice by default; can be set to move the page to trash |
 
 After updating an existing entry, the notice lists each change on its own line, e.g. 「状态:Watching → Completed」 (status), 「进度:11 → 12/12」 (progress), 「补完成日期:2026-11-04」 (finish date filled).
 
 **Total episodes**: use Bangumi's announced episode count first. When it is unknown (shown as `*`), provisionally use the number of main-story episode entries currently listed, excluding specials, OP, ED and other types. This applies to both new and existing entries. If neither an announced count nor main-story episodes are available, or the episode query fails, do not write the total episode field: leave it blank for new entries and preserve its current value for existing entries. Status and the actual number of episodes watched still sync normally. The script will try to fetch the total episode count again on the next automatic check.
 
-**Matching**: by Bangumi URL first, then by title (original or Chinese) if no URL match. Old entries matched by title get their Bangumi URL filled in.
+**Filling empty properties**: for existing entries, Title, Alternative Title, Rating, Comment, Aired and Cover are filled using the same rules as new entries, but only when empty. Existing values are never overwritten. With `SET_PAGE_COVER` on, an empty page banner is filled too. If you clear a property's value, the next sync fills it again.
+
+**Matching**: by Bangumi URL first. If there is no URL match, by title: Title equals the original title, or Alternative Title equals the Chinese title. Title matching only considers pages whose Bangumi URL is empty, so a same-named page already linked to another subject (e.g. a remake) is never picked. Old entries matched by title get their Bangumi URL filled in. If more than one page matches by title, the script writes nothing and asks you to fill in the URL on the right page yourself.
 
 **Dates**:
 
@@ -98,7 +100,7 @@ Edit `CFG` at the top of the script:
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `ON_EXISTING` | `'advance'` | Existing entries: `'advance'` updates status, episodes and progress and fills empty dates; `'skip'` leaves them untouched |
+| `ON_EXISTING` | `'advance'` | Existing entries: `'advance'` updates status, episodes and progress and fills empty properties; `'skip'` leaves them untouched |
 | `DELETE_BEHAVIOR` | `'ignore'` | On removal from collection: `'ignore'` shows a notice, `'archive'` moves the page to trash |
 | `START_DATE_FALLBACK_TODAY` | `false` | Use today when the start date can't be determined |
 | `TITLE_GUARD` | `true` | Also match by title when no URL match is found |
@@ -122,7 +124,10 @@ Usually a property name or type mismatch. Check against the table above.
 Generate a new token and update it from the script menu (「设置 Token / 数据库」).
 
 **I changed my rating on Bangumi but Notion didn't change.**
-By design. For existing entries, rating and comment are yours to maintain in Notion.
+By design. For existing entries, Rating / Comment are filled when empty, but existing values are yours to maintain in Notion and are never overwritten.
+
+**"Notion 里有多条同名且没填链接的页面" (multiple same-named pages without a URL).**
+More than one page matched by title, so the script can't tell which one is right. Fill the subject URL (e.g. `https://bgm.tv/subject/12345`) into the Bangumi property of the right page, then click the sync button again.
 
 ## Privacy
 
